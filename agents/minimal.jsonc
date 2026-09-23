@@ -6,20 +6,58 @@
 //
 // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/create-agent
 {
-  // Shown in the AssemblyAI dashboard. Safe to rename: the agent is tracked
-  // by the AGENT_ID in your .env, not by this.
-  "name": "Minimal agent",
+  "name": "MediCycle Voice",
 
-  // Who the agent is and what it may say. Voice-first: short spoken
-  // sentences, no bullet points, no formatting read aloud.
-  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/prompting-guide
-  "system_prompt": "You are a friendly assistant on a voice call. Keep every reply to one or two short sentences. Answer what was asked, lead with the answer, and skip the preamble. If you don't know something, say so. No exclamation marks.",
+  "system_prompt": "You are the voice check-in assistant for MediCycle, a medication management platform. You call patients for a quick daily check-in. Keep every reply to one or two short sentences, since this is a spoken call. Start by asking how they're feeling today, in a warm, casual way, and briefly acknowledge their answer. Then call get_due_medications to see what's actually scheduled for them today - do not ask them to name their medication, you already know it. Ask specifically about each medication by its real name, one at a time (e.g. 'Did you take your Lisinopril today?'). If they took it, call log_dose_status to record it, then thank them briefly, then move to the next medication if there is one. If they missed it, ask why in one gentle question (forgot, side effects, ran out, other), call log_dose_status with the reason, then call flag_missed_doses to check if this needs escalating. If flag_missed_doses says to escalate, tell them a member of their care team will follow up. Once all scheduled medications are covered, close the call warmly. Keep the tone caring but brief. You do not give medical advice, diagnose, or discuss mental health conditions. If they mention feeling unwell or distressed, acknowledge it kindly and say their care team will follow up, without trying to assess or treat it yourself.",
 
-  // Voice catalog: https://www.assemblyai.com/docs/voice-agents/voice-agent-api/voices
   "voice": { "voice_id": "anna" },
 
-  // The one optional field worth setting every time. Without it the agent
-  // says nothing when the call connects, and silence reads as a broken line.
-  // https://www.assemblyai.com/docs/voice-agents/voice-agent-api/greeting
-  "greeting": "Hey, what can I do for you?"
+  "greeting": "Hi, this is MediCycle checking in. How are you feeling today?",
+
+  "tools": [
+    {
+      "name": "get_due_medications",
+      "description": "Get the list of medications scheduled for this patient today.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "http": {
+        "url": "https://runway-kilometer-hydration.ngrok-free.dev/get-due-medications",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "log_dose_status",
+      "description": "Log whether the patient took their scheduled medication dose today.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "medication": { "type": "string", "description": "Name of the medication" },
+          "taken": { "type": "boolean", "description": "True if the dose was taken, false if missed" },
+          "reason_missed": { "type": "string", "description": "Reason given if missed: forgot, side_effects, ran_out, other, or empty if taken" }
+        },
+        "required": ["medication", "taken"]
+      },
+      "http": {
+        "url": "https://runway-kilometer-hydration.ngrok-free.dev/log-dose",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "flag_missed_doses",
+      "description": "Check how many consecutive doses this patient has missed, to decide whether to escalate.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "medication": { "type": "string", "description": "Name of the medication" }
+        },
+        "required": ["medication"]
+      },
+      "http": {
+        "url": "https://runway-kilometer-hydration.ngrok-free.dev/check-missed-streak",
+        "http_method": "POST"
+      }
+    }
+  ]
 }
