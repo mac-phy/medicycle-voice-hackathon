@@ -63,6 +63,17 @@ def init_db():
             schedule_time TEXT
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS escalations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            patient TEXT NOT NULL,
+            kind TEXT NOT NULL,            -- 'missed_doses' or 'patient_concern'
+            medication TEXT,
+            detail TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.commit()
 
     # Seed a demo patient's medication schedule, only if empty.
@@ -134,10 +145,9 @@ def check_missed_streak():
     conn = get_db()
     # Most recent entries first for this patient + medication.
     rows = conn.execute(
-        "SELECT taken FROM dose_log WHERE patient = ? AND medication = ? ORDER BY logged_at DESC",
+        "SELECT taken FROM dose_log WHERE patient = ? AND medication = ? ORDER BY logged_at DESC, id DESC",
         (DEMO_PATIENT, medication),
     ).fetchall()
-    conn.close()
 
     streak = 0
     for row in rows:
@@ -147,6 +157,24 @@ def check_missed_streak():
             break
 
     escalate = streak >= MISSED_DOSE_ESCALATION_THRESHOLD
+
+    # Make the escalation real: record it for the care team, once per open streak,
+    # instead of relying on the agent merely saying someone will follow up.
+    if escalate:
+        already_open = conn.execute(
+            "SELECT 1 FROM escalations WHERE patient = ? AND kind = 'missed_doses' "
+            "AND medication = ? AND status = 'open'",
+            (DEMO_PATIENT, medication),
+        ).fetchone()
+        if not already_open:
+            conn.execute(
+                "INSERT INTO escalations (patient, kind, medication, detail, created_at) VALUES (?, ?, ?, ?, ?)",
+                (DEMO_PATIENT, "missed_doses", medication,
+                 f"{streak} consecutive missed doses", datetime.now().isoformat()),
+            )
+            conn.commit()
+    conn.close()
+
     return jsonify({
         "escalate": escalate,
         "missed_streak": streak,
@@ -157,9 +185,43 @@ def check_missed_streak():
     })
 
 
+@app.route("/report-concern", methods=["POST"])
+def report_concern():
+    """Record something the patient said that a human should see (e.g. dizziness).
+    The agent passes the patient's own words; it never interprets or diagnoses."""
+    data = request.get_json(force=True) or {}
+    concern = (data.get("concern") or "").strip()
+    medication = (data.get("medication") or "").strip()
+
+    if not concern:
+        return jsonify({"success": False, "message": "No concern provided."}), 400
+
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO escalations (patient, kind, medication, detail, created_at) VALUES (?, ?, ?, ?, ?)",
+        (DEMO_PATIENT, "patient_concern", medication or None, concern, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"success": True, "message": "Concern recorded for the care team."})
+
+
+@app.route("/escalations", methods=["GET"])
+def list_escalations():
+    """What a care team would review. Open items first, newest first."""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, kind, medication, detail, status, created_at FROM escalations "
+        "WHERE patient = ? ORDER BY (status = 'open') DESC, created_at DESC",
+        (DEMO_PATIENT,),
+    ).fetchall()
+    conn.close()
+    return jsonify({"escalations": [dict(r) for r in rows]})
+
+
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "MediCycle Voice adherence server is running"})
+    return jsonify({"status": "Vocare voice adherence server is running"})
 
 
 if __name__ == "__main__":
