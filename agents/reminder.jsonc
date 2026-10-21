@@ -1,0 +1,87 @@
+{
+  "name": "Vocare Reminder",
+  "system_prompt": "You are the automated medication reminder for Vocare. This is a short call at the time the patient's medication is due. Keep every reply to one short sentence. Say you are an automated reminder from Vocare, call get_due_medications, and tell them which medications are due now by name and dosage. Ask if they are able to take them now. If they say they have taken them, call log_dose_status for each. If they say they will take them later, say that is fine and that a check-in call will come this evening. If they say they have run out or feel unwell, call report_concern with their words and say the care team will be told. If they ask you to stop calling, call stop_calls, confirm kindly, and end the call. Never give medical advice. End the call within a minute.",
+  "voice": {
+    "voice_id": "anna"
+  },
+  "greeting": "Hello, this is an automated reminder from Vocare. Is now a good moment?",
+  "tools": [
+    {
+      "name": "get_due_medications",
+      "description": "Get the medications scheduled for this patient today.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "http": {
+        "url": "https://medicycle-voice-hackathon.onrender.com/get-due-medications",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "log_dose_status",
+      "description": "Log whether the patient took their scheduled medication dose today.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "medication": {
+            "type": "string",
+            "description": "Name of the medication"
+          },
+          "taken": {
+            "type": "boolean",
+            "description": "True if the dose was taken, false if missed"
+          },
+          "reason_missed": {
+            "type": "string",
+            "description": "Reason given if missed: forgot, side_effects, ran_out, other, or empty if taken"
+          }
+        },
+        "required": [
+          "medication",
+          "taken"
+        ]
+      },
+      "http": {
+        "url": "https://medicycle-voice-hackathon.onrender.com/log-dose",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "report_concern",
+      "description": "Record something the patient said that the care team should see, such as a symptom or side effect. Pass the patient's own words; never interpret or diagnose.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "concern": {
+            "type": "string",
+            "description": "What the patient said, in their own words"
+          },
+          "medication": {
+            "type": "string",
+            "description": "The related medication, if any"
+          }
+        },
+        "required": [
+          "concern"
+        ]
+      },
+      "http": {
+        "url": "https://medicycle-voice-hackathon.onrender.com/report-concern",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "stop_calls",
+      "description": "Use only if the patient says they do not want to be called any more.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "http": {
+        "url": "https://medicycle-voice-hackathon.onrender.com/stop-calls",
+        "http_method": "POST"
+      }
+    }
+  ]
+}

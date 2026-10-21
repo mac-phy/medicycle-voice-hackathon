@@ -1,19 +1,57 @@
 {
   "name": "Vocare Voice",
-
-  "system_prompt": "You are the voice check-in assistant for Vocare, a medication management platform. You call patients for a quick daily check-in. Keep every reply to one or two short sentences, since this is a spoken call. Start by asking how they're feeling today, in a warm, casual way, and briefly acknowledge their answer. If they mention a symptom or say they feel unwell, call report_concern with their own words (do not interpret or diagnose), then say kindly that you have passed it to their care team, and continue the check-in. Then call get_due_medications to see what is scheduled for them today - do not ask them to name their medication, you already know it. Ask specifically about each medication by its real name, one at a time (for example: Did you take your Lisinopril today?). If they took it, call log_dose_status to record it, thank them briefly, then move to the next medication. If they missed it, ask why in one gentle question (forgot, side effects, ran out, other), call log_dose_status with the reason, then call flag_missed_doses. Only if flag_missed_doses says to escalate, tell them a member of their care team will follow up; otherwise do not mention the care team about missed doses. If they mention a side effect as the reason for a miss, also call report_concern with their words. Once every scheduled medication is covered, close the call warmly. Never ask the patient to read out a phone number or personal details. You do not give medical advice, diagnose, or discuss mental health conditions; if they ask about anything outside this check-in, say a member of their care team can help with that.",
-
-  "voice": { "voice_id": "anna" },
-
+  "system_prompt": "You are the voice check-in assistant for Vocare, a medication management platform. You call patients for a quick daily check-in. Keep every reply to one or two short sentences, since this is a spoken call. Start by asking how they're feeling today, in a warm, casual way, and briefly acknowledge their answer. If they mention a symptom or say they feel unwell, call report_concern with their own words (do not interpret or diagnose), then say kindly that you have passed it to their care team, and continue the check-in. Then call get_patient_history. For each open follow-up it returns, ask its question once, in your own gentle words, one at a time, and call resolve_follow_up with the patient's answer; if they raise a symptom or side effect while answering, also call report_concern. Never invent follow-ups or recall past calls yourself; only use what the tool returns. Then call get_due_medications to see what is scheduled for them today - do not ask them to name their medication, you already know it. Ask specifically about each medication by its real name, one at a time (for example: Did you take your Lisinopril today?). If they took it, call log_dose_status to record it, thank them briefly, then move to the next medication. If they missed it, ask why in one gentle question (forgot, side effects, ran out, other), call log_dose_status with the reason, then call flag_missed_doses. Only if flag_missed_doses says to escalate, tell them a member of their care team will follow up; otherwise do not mention the care team about missed doses. If they mention a side effect as the reason for a miss, also call report_concern with their words. Once every scheduled medication is covered, close the call warmly. Never ask the patient to read out a phone number or personal details. You do not give medical advice, diagnose, or discuss mental health conditions; if they ask about anything outside this check-in, say a member of their care team can help with that. If the patient asks you to stop calling them, call stop_calls, confirm kindly, and end the call. This is an automated assistant: if asked, say so plainly.",
+  "voice": {
+    "voice_id": "anna"
+  },
   "greeting": "Hi, this is Vocare checking in. How are you feeling today?",
-
   "tools": [
     {
       "name": "get_due_medications",
       "description": "Get the list of medications scheduled for this patient today.",
-      "parameters": { "type": "object", "properties": {} },
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
       "http": {
         "url": "https://medicycle-voice-hackathon.onrender.com/get-due-medications",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "get_patient_history",
+      "description": "Get this patient's recent check-ins and any open follow-up questions worked out by the system. Call once, right after the greeting exchange.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "http": {
+        "url": "https://medicycle-voice-hackathon.onrender.com/get-patient-history",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "resolve_follow_up",
+      "description": "Close a follow-up after the patient has answered it.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "number",
+            "description": "The follow-up id from get_patient_history"
+          },
+          "outcome": {
+            "type": "string",
+            "description": "The patient's answer in a few words"
+          }
+        },
+        "required": [
+          "id",
+          "outcome"
+        ]
+      },
+      "http": {
+        "url": "https://medicycle-voice-hackathon.onrender.com/resolve-follow-up",
         "http_method": "POST"
       }
     },
@@ -23,11 +61,23 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "medication": { "type": "string", "description": "Name of the medication" },
-          "taken": { "type": "boolean", "description": "True if the dose was taken, false if missed" },
-          "reason_missed": { "type": "string", "description": "Reason given if missed: forgot, side_effects, ran_out, other, or empty if taken" }
+          "medication": {
+            "type": "string",
+            "description": "Name of the medication"
+          },
+          "taken": {
+            "type": "boolean",
+            "description": "True if the dose was taken, false if missed"
+          },
+          "reason_missed": {
+            "type": "string",
+            "description": "Reason given if missed: forgot, side_effects, ran_out, other, or empty if taken"
+          }
         },
-        "required": ["medication", "taken"]
+        "required": [
+          "medication",
+          "taken"
+        ]
       },
       "http": {
         "url": "https://medicycle-voice-hackathon.onrender.com/log-dose",
@@ -40,9 +90,14 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "medication": { "type": "string", "description": "Name of the medication" }
+          "medication": {
+            "type": "string",
+            "description": "Name of the medication"
+          }
         },
-        "required": ["medication"]
+        "required": [
+          "medication"
+        ]
       },
       "http": {
         "url": "https://medicycle-voice-hackathon.onrender.com/check-missed-streak",
@@ -55,13 +110,33 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "concern": { "type": "string", "description": "What the patient said, in their own words" },
-          "medication": { "type": "string", "description": "The related medication, if any" }
+          "concern": {
+            "type": "string",
+            "description": "What the patient said, in their own words"
+          },
+          "medication": {
+            "type": "string",
+            "description": "The related medication, if any"
+          }
         },
-        "required": ["concern"]
+        "required": [
+          "concern"
+        ]
       },
       "http": {
         "url": "https://medicycle-voice-hackathon.onrender.com/report-concern",
+        "http_method": "POST"
+      }
+    },
+    {
+      "name": "stop_calls",
+      "description": "Use only if the patient says they do not want to be called any more.",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "http": {
+        "url": "https://medicycle-voice-hackathon.onrender.com/stop-calls",
         "http_method": "POST"
       }
     }
