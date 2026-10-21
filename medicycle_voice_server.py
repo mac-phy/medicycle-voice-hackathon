@@ -59,6 +59,10 @@ SCHEDULER_TOKEN = os.environ.get("SCHEDULER_TOKEN", "")
 CALL_WINDOW_MINUTES = 90
 # How far back follow-ups look.
 HISTORY_DAYS = 7
+# Unconfirmed-dose questions only look this far back; older ones are dropped.
+UNCONFIRMED_DAYS = 2
+# Most follow-up questions asked in one call.
+MAX_FOLLOW_UPS_PER_CALL = 3
 
 
 def now_eat():
@@ -117,6 +121,7 @@ def init_db():
             ref_date TEXT NOT NULL,    -- the day this arose; dedupes repeats
             status TEXT NOT NULL DEFAULT 'open',
             outcome TEXT,
+            resolved_at TEXT,
             created_at TEXT NOT NULL,
             UNIQUE (patient, kind, medication, ref_date)
         )
@@ -143,6 +148,10 @@ def init_db():
             UNIQUE (patient, kind, call_date)   -- one call of each kind per day
         )
     """)
+    try:  # older databases made before resolved_at existed
+        conn.execute("ALTER TABLE follow_ups ADD COLUMN resolved_at TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
 
     # Seed a demo patient's medication schedule, only if empty.
@@ -341,7 +350,8 @@ def compute_follow_ups(conn):
     if first:
         meds = [m["medication"] for m in conn.execute(
             "SELECT medication FROM medication_schedule WHERE patient = ?", (DEMO_PATIENT,)).fetchall()]
-        day = datetime.strptime(max(first, since), "%Y-%m-%d")
+        recent = (now_eat() - timedelta(days=UNCONFIRMED_DAYS)).strftime("%Y-%m-%d")
+        day = datetime.strptime(max(first, recent), "%Y-%m-%d")
         end = datetime.strptime(today, "%Y-%m-%d")
         while day < end:
             ds = day.strftime("%Y-%m-%d")
@@ -353,7 +363,27 @@ def compute_follow_ups(conn):
                     add("unconfirmed_dose", med,
                         f"We never confirmed your {med} on {ds}. Did you take it that day?", ds)
             day += timedelta(days=1)
+    conn.execute(
+        "UPDATE follow_ups SET status = 'expired' WHERE patient = ? AND kind = 'unconfirmed_dose' "
+        "AND status = 'open' AND ref_date < ?",
+        (DEMO_PATIENT, (now_eat() - timedelta(days=UNCONFIRMED_DAYS)).strftime("%Y-%m-%d")))
     conn.commit()
+
+
+def next_follow_up(conn):
+    """One at a time, so the agent never sees (or guesses) later ids.
+    Stops after MAX_FOLLOW_UPS_PER_CALL resolved in the last 30 minutes."""
+    cutoff = (now_eat() - timedelta(minutes=30)).isoformat()
+    done = conn.execute(
+        "SELECT COUNT(*) AS c FROM follow_ups WHERE patient = ? AND status = 'resolved' AND resolved_at >= ?",
+        (DEMO_PATIENT, cutoff)).fetchone()["c"]
+    if done >= MAX_FOLLOW_UPS_PER_CALL:
+        return None
+    r = conn.execute(
+        "SELECT id, kind, medication, question FROM follow_ups WHERE patient = ? AND status = 'open' "
+        "ORDER BY CASE kind WHEN 'concern' THEN 0 WHEN 'refill' THEN 1 WHEN 'side_effect' THEN 2 ELSE 3 END, id LIMIT 1",
+        (DEMO_PATIENT,)).fetchone()
+    return dict(r) if r else None
 
 
 @app.route("/get-patient-history", methods=["POST"])
@@ -368,14 +398,14 @@ def get_patient_history():
         (DEMO_PATIENT, since)).fetchall():
         entry = "taken" if r["taken"] else f"missed ({r['reason_missed'] or 'no reason'})"
         days.setdefault(r["d"], []).append(f"{r['medication']}: {entry}")
-    follow_ups = [dict(r) for r in conn.execute(
-        "SELECT id, kind, medication, question FROM follow_ups "
-        "WHERE patient = ? AND status = 'open' ORDER BY created_at, id", (DEMO_PATIENT,)).fetchall()]
+    nxt = next_follow_up(conn)
     conn.close()
     return jsonify({
         "recent_days": [{"date": d, "doses": v} for d, v in sorted(days.items())],
-        "open_follow_ups": follow_ups,
-        "instruction": "Ask each open follow-up question once, briefly, then call resolve_follow_up with the patient's answer.",
+        "next_follow_up": nxt,
+        "instruction": ("Ask the next_follow_up question once, then wait for the patient's answer before calling "
+                        "resolve_follow_up with that exact id. You will be given the following one after that."
+                        if nxt else "No follow-ups needed. Move on to today's medications."),
     })
 
 
@@ -387,15 +417,26 @@ def resolve_follow_up():
     except (TypeError, ValueError):
         return jsonify({"success": False, "message": "A numeric follow-up id is required."}), 400
     outcome = (data.get("outcome") or "").strip()
+    if not outcome:
+        return jsonify({"success": False, "message": "Ask the patient and pass their answer."}), 400
     conn = get_db()
     cur = conn.execute(
-        "UPDATE follow_ups SET status = 'resolved', outcome = ? WHERE id = ? AND patient = ? AND status = 'open'",
-        (outcome, fid, DEMO_PATIENT))
+        "UPDATE follow_ups SET status = 'resolved', outcome = ?, resolved_at = ? "
+        "WHERE id = ? AND patient = ? AND status = 'open'",
+        (outcome, now_eat().isoformat(), fid, DEMO_PATIENT))
     conn.commit()
-    conn.close()
     if cur.rowcount == 0:
+        conn.close()
         return jsonify({"success": False, "message": "No open follow-up with that id."})
-    return jsonify({"success": True, "message": "Follow-up closed."})
+    nxt = next_follow_up(conn)
+    conn.close()
+    return jsonify({
+        "success": True,
+        "message": "Follow-up closed.",
+        "next_follow_up": nxt,
+        "instruction": ("Ask the next_follow_up question once and wait for the answer before resolving it."
+                        if nxt else "No more follow-ups. Move on to today's medications."),
+    })
 
 
 @app.route("/stop-calls", methods=["POST"])
